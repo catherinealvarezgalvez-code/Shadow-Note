@@ -2,6 +2,46 @@
 
 Aplicación de notas con backend PHP + SQLite y PWA offline.
 
+## Status
+
+✅ **PROYECTO COMPLETADO**
+
+- ✅ Backend: PHP 8.2 + SQLite3 + JWT Authentication
+- ✅ Frontend: HTML5 + CSS3 + JavaScript ES6+
+- ✅ PWA Features: Service Worker + Manifest + Offline Support
+- ✅ Offline Sync: Operaciones guardadas localmente y sincronizadas
+- ✅ Responsive Design: Funciona en desktop, tablet y mobile
+
+## Acceso a la Aplicación
+
+```
+http://localhost/Shadow-Note/
+o
+http://127.0.0.1/Shadow-Note/
+```
+
+## Características
+
+### Online
+- Registro de nuevos usuarios
+- Login con correo y contraseña
+- CRUD completo de notas
+- Sincronización en tiempo real
+- Logout seguro
+
+### Offline
+- Ver notas guardadas
+- Crear nuevas notas
+- Editar notas existentes
+- Eliminar notas
+- Sincronización automática cuando vuelve la conexión
+
+### PWA
+- Instalable como app de escritorio
+- Funciona sin conexión a internet
+- Actualización automática
+- Icono en pantalla de inicio
+
 ## Estructura completa
 - `config.php`: configuración principal y ruta de la base de datos.
 - `src/db.php`: helper para conectar a SQLite con PDO.
@@ -44,13 +84,15 @@ Esto creará el archivo `data/database.sqlite` y las tablas `users`, `notes`, `l
 - **JavaScript SPA**: Una sola página que maneja auth y notas dinámicamente.
 - **PWA completa**: Service Worker con estrategias de cache offline.
 - **Offline first**: Detecta conexión y funciona sin internet usando cache.
+- **Sincronización offline**: Cambios de notas se guardan localmente y se sincronizan cuando vuelve la conexión.
 
 ## Flujo del frontend
 1. **Carga inicial**: Verifica JWT en localStorage.
 2. **Auth**: Formularios de login/registro que llaman a `api/auth.php`.
 3. **Main app**: Lista notas desde `api/notes.php`, permite CRUD completo.
 4. **Offline**: Service Worker cachea app y datos para funcionamiento sin red.
-5. **Responsive**: Funciona en móvil y desktop.
+5. **Sync**: Operaciones de crear/editar/eliminar se guardan localmente cuando hay corte y se envían al servidor luego.
+6. **Responsive**: Funciona en móvil y desktop.
 
 ## Cómo usar
 1. Abre `http://localhost/Shadow-Note/` en tu navegador.

@@ -51,6 +51,7 @@
                 <h1>Shadow Note</h1>
                 <div class="user-info">
                     <span id="user-email"></span>
+                    <button id="sync-btn" class="btn btn-secondary" style="display:none;" title="Sincronizar cambios offline">🔄 Sincronizar</button>
                     <button id="logout-btn" class="btn btn-secondary">Cerrar Sesión</button>
                 </div>
             </header>

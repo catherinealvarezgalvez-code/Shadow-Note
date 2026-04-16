@@ -15,9 +15,13 @@ class ShadowNoteApp {
 
         // Registrar service worker para PWA
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('service-worker.js')
-                .then(reg => console.log('Service Worker registrado'))
-                .catch(err => console.log('Error registrando SW:', err));
+            navigator.serviceWorker.register('/Shadow-Note/service-worker.js')
+                .then(reg => {
+                    console.log('Service Worker registrado', reg.scope);
+                })
+                .catch(err => {
+                    console.error('Error registrando SW:', err);
+                });
         }
     }
 
@@ -50,20 +54,47 @@ class ShadowNoteApp {
         document.getElementById('cancel-edit-btn').addEventListener('click', () => this.hideNoteEditor());
 
         // Online/Offline detection
-        window.addEventListener('online', () => this.showMessage('Conexión restaurada', 'success'));
-        window.addEventListener('offline', () => this.showMessage('Modo offline activado', 'info'));
+        window.addEventListener('online', () => {
+            console.log('Evento online disparado');
+            this.showMessage('Conexión restaurada', 'success');
+            this.syncPendingOperations();
+        });
+        window.addEventListener('offline', () => {
+            console.log('Evento offline disparado');
+            this.showMessage('Modo offline activado', 'info');
+        });
+
+        // Verificar estado de conexión cada 5 segundos
+        setInterval(() => {
+            if (navigator.onLine && this.token) {
+                const pending = this.getPendingOperations();
+                if (pending.length > 0) {
+                    console.log('Verificación periódica: encontradas', pending.length, 'operaciones pendientes');
+                    this.syncPendingOperations();
+                }
+            }
+        }, 5000);
     }
 
     checkAuth() {
         if (this.token) {
-            // Verificar si el token es válido
+            // Verificar si el token es válido o usar el modo offline
             this.verifyToken().then(valid => {
                 if (valid) {
                     this.showMainApp();
-                    this.loadNotes();
+                    this.loadNotes().then(() => {
+                        // Después de cargar las notas, sincronizar operaciones pendientes
+                        this.syncPendingOperations();
+                        // Mostrar estado de sincronización
+                        setTimeout(() => this.showSyncStatus(), 1000);
+                    });
                 } else {
+                    console.warn('Token inválido, limpiando sesión');
                     this.logout();
                 }
+            }).catch(err => {
+                console.error('Error verificando token:', err);
+                this.logout();
             });
         } else {
             this.showAuthSection();
@@ -71,6 +102,11 @@ class ShadowNoteApp {
     }
 
     async verifyToken() {
+        if (!navigator.onLine) {
+            // En modo offline, asumimos que el token es válido si ya estaba guardado.
+            return true;
+        }
+
         try {
             const response = await fetch('api/notes.php', {
                 headers: {
@@ -87,6 +123,11 @@ class ShadowNoteApp {
     async login() {
         const email = document.getElementById('login-email').value;
         const password = document.getElementById('login-password').value;
+
+        if (!navigator.onLine) {
+            this.showMessage('Sin conexión a internet. Por favor, revisa tu conexión.',  'error');
+            return;
+        }
 
         try {
             const response = await fetch('api/auth.php', {
@@ -122,6 +163,11 @@ class ShadowNoteApp {
         const email = document.getElementById('register-email').value;
         const password = document.getElementById('register-password').value;
 
+        if (!navigator.onLine) {
+            this.showMessage('Sin conexión a internet. Por favor, revisa tu conexión.', 'error');
+            return;
+        }
+
         try {
             const response = await fetch('api/auth.php', {
                 method: 'POST',
@@ -155,14 +201,26 @@ class ShadowNoteApp {
     logout() {
         this.token = null;
         localStorage.removeItem('shadow_note_token');
+        localStorage.removeItem('shadow_note_notes');
+        localStorage.removeItem('shadow_note_pending');
         this.user = null;
         this.notes = [];
         this.currentNoteId = null;
+        console.log('Sesión cerrada completamente');
         this.showAuthSection();
         this.showMessage('Sesión cerrada', 'info');
     }
 
     async loadNotes() {
+        if (!navigator.onLine) {
+            const offlineNotes = this.getOfflineNotes();
+            if (offlineNotes.length > 0) {
+                this.notes = offlineNotes;
+                this.renderNotes();
+                return;
+            }
+        }
+
         try {
             const response = await fetch('api/notes.php', {
                 headers: {
@@ -173,6 +231,7 @@ class ShadowNoteApp {
             if (response.ok) {
                 const data = await response.json();
                 this.notes = data.notes || [];
+                this.setOfflineNotes(this.notes);
                 this.renderNotes();
             } else if (response.status === 401) {
                 this.logout();
@@ -182,7 +241,11 @@ class ShadowNoteApp {
         } catch (error) {
             this.showMessage('Error de conexión - Modo offline', 'info');
             console.error('Load notes error:', error);
-            // En offline, podríamos cargar desde localStorage o IndexedDB
+            const offlineNotes = this.getOfflineNotes();
+            if (offlineNotes.length > 0) {
+                this.notes = offlineNotes;
+                this.renderNotes();
+            }
         }
     }
 
@@ -246,13 +309,19 @@ class ShadowNoteApp {
             return;
         }
 
-        try {
-            let response;
-            const noteData = { title, body };
+        const noteData = { title, body };
 
-            if (this.currentNoteId) {
-                // Actualizar nota existente
-                noteData.id = this.currentNoteId;
+        let noteSavedOffline = false;
+        let noteId = this.currentNoteId;
+
+        try {
+            if (!navigator.onLine) {
+                throw new Error('offline');
+            }
+
+            let response;
+            if (noteId) {
+                noteData.id = noteId;
                 response = await fetch('api/notes.php', {
                     method: 'PUT',
                     headers: {
@@ -262,7 +331,6 @@ class ShadowNoteApp {
                     body: JSON.stringify(noteData)
                 });
             } else {
-                // Crear nueva nota
                 response = await fetch('api/notes.php', {
                     method: 'POST',
                     headers: {
@@ -274,15 +342,38 @@ class ShadowNoteApp {
             }
 
             if (response.ok) {
-                this.showMessage(this.currentNoteId ? 'Nota actualizada' : 'Nota creada', 'success');
+                this.showMessage(noteId ? 'Nota actualizada' : 'Nota creada', 'success');
                 this.hideNoteEditor();
                 this.loadNotes();
-            } else {
-                this.showMessage('Error guardando la nota', 'error');
+                return;
             }
+
+            throw new Error('server');
         } catch (error) {
-            this.showMessage('Error de conexión', 'error');
-            console.error('Save note error:', error);
+            noteSavedOffline = true;
+            if (noteId) {
+                this.updateLocalNote(noteId, title, body);
+                if (noteId > 0) {
+                    this.queueOperation({ action: 'update', id: noteId, title, body });
+                }
+            } else {
+                const localId = this.generateLocalId();
+                const note = {
+                    id: localId,
+                    title,
+                    body,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                };
+                this.notes.unshift(note);
+                this.queueOperation({ action: 'create', tempId: localId, title, body });
+            }
+
+            this.setOfflineNotes(this.notes);
+            this.renderNotes();
+            this.hideNoteEditor();
+            this.showMessage('Nota guardada localmente. Se sincronizará cuando vuelva la conexión.', 'info');
+            console.error('Save note offline:', error);
         }
     }
 
@@ -292,6 +383,10 @@ class ShadowNoteApp {
         }
 
         try {
+            if (!navigator.onLine) {
+                throw new Error('offline');
+            }
+
             const response = await fetch(`api/notes.php?id=${noteId}`, {
                 method: 'DELETE',
                 headers: {
@@ -302,22 +397,31 @@ class ShadowNoteApp {
             if (response.ok) {
                 this.showMessage('Nota eliminada', 'success');
                 this.loadNotes();
-            } else {
-                this.showMessage('Error eliminando la nota', 'error');
+                return;
             }
+
+            throw new Error('server');
         } catch (error) {
-            this.showMessage('Error de conexión', 'error');
-            console.error('Delete note error:', error);
+            this.notes = this.notes.filter(note => note.id !== noteId);
+            this.setOfflineNotes(this.notes);
+
+            if (noteId > 0) {
+                this.queueOperation({ action: 'delete', id: noteId });
+            } else {
+                this.cleanPendingTempOps(noteId);
+            }
+
+            this.renderNotes();
+            this.showMessage('Nota eliminada localmente. Se sincronizará cuando vuelva la conexión.', 'info');
+            console.error('Delete note offline:', error);
         }
     }
 
     editNote(noteOrId) {
         let note;
         if (typeof noteOrId === 'number') {
-            // Si es un ID, buscar la nota completa
             note = this.notes.find(n => n.id === noteOrId);
         } else {
-            // Si es el objeto note completo
             note = noteOrId;
         }
 
@@ -329,9 +433,145 @@ class ShadowNoteApp {
         }
     }
 
+    async syncPendingOperations() {
+        const pending = this.getPendingOperations();
+        if (!navigator.onLine || !pending.length || !this.token) {
+            console.log('Sync bloqueado - onLine:', navigator.onLine, 'pending:', pending.length, 'token:', !!this.token);
+            return;
+        }
+
+        console.log('Iniciando sincronización de', pending.length, 'operaciones pendientes');
+        
+        let syncedCount = 0;
+        let failedCount = 0;
+
+        for (const op of pending) {
+            try {
+                if (op.action === 'create') {
+                    const response = await fetch('api/notes.php', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${this.token}`
+                        },
+                        body: JSON.stringify({ title: op.title, body: op.body })
+                    });
+
+                    if (response.ok) {
+                        this.removePendingOperation(op);
+                        syncedCount++;
+                        console.log('Operación CREATE sincronizada');
+                    } else {
+                        throw new Error(`sync create failed: ${response.status}`);
+                    }
+                } else if (op.action === 'update') {
+                    if (op.id > 0) {
+                        const response = await fetch('api/notes.php', {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${this.token}`
+                            },
+                            body: JSON.stringify({ id: op.id, title: op.title, body: op.body })
+                        });
+                        if (response.ok) {
+                            this.removePendingOperation(op);
+                            syncedCount++;
+                            console.log('Operación UPDATE sincronizada');
+                        } else {
+                            throw new Error(`sync update failed: ${response.status}`);
+                        }
+                    }
+                } else if (op.action === 'delete') {
+                    if (op.id > 0) {
+                        const response = await fetch(`api/notes.php?id=${op.id}`, {
+                            method: 'DELETE',
+                            headers: {
+                                'Authorization': `Bearer ${this.token}`
+                            }
+                        });
+                        if (response.ok) {
+                            this.removePendingOperation(op);
+                            syncedCount++;
+                            console.log('Operación DELETE sincronizada');
+                        } else {
+                            throw new Error(`sync delete failed: ${response.status}`);
+                        }
+                    }
+                }
+            } catch (error) {
+                failedCount++;
+                console.error('Error sincronizando operación:', op, error);
+                // Continúa con la siguiente operación en lugar de hacer break
+            }
+        }
+
+        // Recargar notas del servidor para asegurar consistencia
+        await this.loadNotes();
+
+        // Mostrar mensaje de resultado
+        if (syncedCount > 0) {
+            this.showMessage(`${syncedCount} operación(es) sincronizada(s) exitosamente`, 'success');
+        }
+        if (failedCount > 0) {
+            this.showMessage(`${failedCount} operación(es) no se sincronizaron. Serán reintentadas próximamente.`, 'warning');
+        }
+        
+        console.log('Sincronización completada - Sincronizadas:', syncedCount, 'Fallidas:', failedCount);
+    }
+
+    queueOperation(operation) {
+        const pending = this.getPendingOperations();
+        pending.push(operation);
+        localStorage.setItem('shadow_note_pending', JSON.stringify(pending));
+    }
+
+    removePendingOperation(operation) {
+        const pending = this.getPendingOperations();
+        const filtered = pending.filter(op => JSON.stringify(op) !== JSON.stringify(operation));
+        localStorage.setItem('shadow_note_pending', JSON.stringify(filtered));
+    }
+
+    getPendingOperations() {
+        return JSON.parse(localStorage.getItem('shadow_note_pending') || '[]');
+    }
+
+    cleanPendingTempOps(tempId) {
+        const pending = this.getPendingOperations();
+        const filtered = pending.filter(op => op.tempId !== tempId && op.id !== tempId);
+        localStorage.setItem('shadow_note_pending', JSON.stringify(filtered));
+    }
+
+    getOfflineNotes() {
+        return JSON.parse(localStorage.getItem('shadow_note_notes') || '[]');
+    }
+
+    setOfflineNotes(notes) {
+        localStorage.setItem('shadow_note_notes', JSON.stringify(notes));
+    }
+
+    updateLocalNote(id, title, body) {
+        this.notes = this.notes.map(note => {
+            if (note.id === id) {
+                return {
+                    ...note,
+                    title,
+                    body,
+                    updated_at: new Date().toISOString()
+                };
+            }
+            return note;
+        });
+    }
+
+    generateLocalId() {
+        return Date.now() * -1;
+    }
+
     showAuthSection() {
         document.getElementById('auth-section').classList.remove('hidden');
         document.getElementById('main-app').classList.add('hidden');
+        this.showLoginForm();
     }
 
     showMainApp() {
@@ -343,11 +583,17 @@ class ShadowNoteApp {
     showLoginForm() {
         document.getElementById('login-form').classList.remove('hidden');
         document.getElementById('register-form').classList.add('hidden');
+        // Limpiar campos
+        document.getElementById('login-email').value = '';
+        document.getElementById('login-password').value = '';
     }
 
     showRegisterForm() {
         document.getElementById('register-form').classList.remove('hidden');
         document.getElementById('login-form').classList.add('hidden');
+        // Limpiar campos
+        document.getElementById('register-email').value = '';
+        document.getElementById('register-password').value = '';
     }
 
     showMessage(message, type = 'info') {
@@ -365,6 +611,13 @@ class ShadowNoteApp {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    showSyncStatus() {
+        const pending = this.getPendingOperations();
+        if (pending.length > 0 && !navigator.onLine) {
+            this.showMessage(`${pending.length} operación(es) pendiente(s) de sincronización cuando vuelva la conexión`, 'info');
+        }
     }
 }
 
