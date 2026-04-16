@@ -1,0 +1,7 @@
+# Ignorar la base de datos local SQLite y archivos de caché
+/data/database.sqlite
+/node_modules/
+/.idea/
+/.vscode/
+/vendor/
+.DS_Store
